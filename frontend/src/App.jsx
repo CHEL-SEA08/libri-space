@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 
-const API = "http://localhost:5000/api";
+const API = "https://libri-space-backend.onrender.com/api";
 
 // MAIN APP
 function App() {

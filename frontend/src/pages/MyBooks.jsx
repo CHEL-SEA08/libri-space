@@ -11,7 +11,7 @@ export default function MyBooks() {
     async function loadTransactions() {
       try {
         const response = await fetch(
-          "http://localhost:5000/api/transactions/my",
+          "https://libri-space-backend.onrender.com/api/transactions/my",
           { headers: { Authorization: `Bearer ${token}` } }
         );
 
