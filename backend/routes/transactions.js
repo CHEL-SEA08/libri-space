@@ -1,7 +1,11 @@
 
 const express = require("express");
+const mongoose = require("mongoose");
+
 const Book = require("../models/Book");
+const User = require("../models/User");
 const Transaction = require("../models/Transaction");
+
 const {
   authMiddleware,
   adminOnly
@@ -12,60 +16,124 @@ const router = express.Router();
 const LOAN_DAYS = 14;
 const FINE_PER_DAY = 5;
 
-// Issue a book to a member
-router.post(
-  "/issue",
-  authMiddleware,
-  adminOnly,
-  async (req, res) => {
-    try {
-      const { userId, bookId } = req.body;
+// ISSUE A BOOK
+// Admin can issue to a selected member.
+// Members can issue books to themselves.
+router.post("/issue", authMiddleware, async (req, res) => {
+  try {
+    const { bookId, userId } = req.body;
 
-      const User = require("../models/User");
-      const user = await User.findById(userId);
-      const book = await Book.findById(bookId);
+    if (!bookId || !mongoose.Types.ObjectId.isValid(bookId)) {
+      return res.status(400).json({
+        message: "A valid Book ID is required"
+      });
+    }
 
-      if (!user || user.role !== "member") {
+    let targetUserId;
+
+    if (req.user.role === "admin") {
+      if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+        return res.status(400).json({
+          message: "A valid Member User ID is required"
+        });
+      }
+
+      const member = await User.findById(userId);
+
+      if (!member || member.role !== "member") {
         return res.status(404).json({
           message: "Member not found"
         });
       }
 
-      if (!book) {
-        return res.status(404).json({
-          message: "Book not found"
-        });
-      }
+      targetUserId = member._id;
+    } else if (req.user.role === "member") {
+      // A member can issue only to themselves.
+      targetUserId = req.user._id;
+    } else {
+      return res.status(403).json({
+        message: "You are not allowed to issue books"
+      });
+    }
 
-      if (book.availableCopies < 1) {
-        return res.status(400).json({
-          message: "No copies available"
-        });
-      }
+    const book = await Book.findById(bookId);
 
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + LOAN_DAYS);
+    if (!book) {
+      return res.status(404).json({
+        message: "Book not found"
+      });
+    }
 
+    if (book.availableCopies < 1) {
+      return res.status(400).json({
+        message: "No copies available"
+      });
+    }
+
+    // Prevent the same member from borrowing
+    // the same book again while it is still issued.
+    const existingTransaction = await Transaction.findOne({
+      user: targetUserId,
+      book: bookId,
+      status: "issued"
+    });
+
+    if (existingTransaction) {
+      return res.status(400).json({
+        message: "This member has already borrowed this book"
+      });
+    }
+
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + LOAN_DAYS);
+
+    // Reduce available copies safely.
+    const updatedBook = await Book.findOneAndUpdate(
+      {
+        _id: bookId,
+        availableCopies: { $gt: 0 }
+      },
+      {
+        $inc: { availableCopies: -1 }
+      },
+      { new: true }
+    );
+
+    if (!updatedBook) {
+      return res.status(400).json({
+        message: "No copies available"
+      });
+    }
+
+    try {
       const transaction = await Transaction.create({
-        user: user._id,
-        book: book._id,
+        user: targetUserId,
+        book: bookId,
         dueDate
       });
 
-      book.availableCopies -= 1;
-      await book.save();
-
-      res.status(201).json({
+      return res.status(201).json({
         message: "Book issued successfully",
         transaction
       });
     } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  }
-);
+      // Restore the copy if transaction creation fails.
+      await Book.findByIdAndUpdate(bookId, {
+        $inc: { availableCopies: 1 }
+      });
 
-// View the logged-in member's borrowing history
+      throw error;
+    }
+
+  } catch (error) {
+    res.status(500).json({
+      message: error.message
+    });
+  }
+});
+
+
+// MEMBER: VIEW OWN BORROWING HISTORY
 router.get("/my", authMiddleware, async (req, res) => {
   try {
     const transactions = await Transaction.find({
@@ -75,31 +143,34 @@ router.get("/my", authMiddleware, async (req, res) => {
       .sort({ issueDate: -1 });
 
     res.json(transactions);
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      message: error.message
+    });
   }
 });
 
-// View all borrowing records (admin)
-router.get(
-  "/",
-  authMiddleware,
-  adminOnly,
-  async (req, res) => {
-    try {
-      const transactions = await Transaction.find()
-        .populate("user", "name email")
-        .populate("book", "title author")
-        .sort({ issueDate: -1 });
 
-      res.json(transactions);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
+// ADMIN: VIEW ALL TRANSACTIONS
+router.get("/", authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const transactions = await Transaction.find()
+      .populate("user", "name email")
+      .populate("book", "title author")
+      .sort({ issueDate: -1 });
+
+    res.json(transactions);
+
+  } catch (error) {
+    res.status(500).json({
+      message: error.message
+    });
   }
-);
+});
 
-// Return a book (admin)
+
+// ADMIN: RETURN A BOOK
 router.post(
   "/:id/return",
   authMiddleware,
@@ -121,7 +192,10 @@ router.post(
       }
 
       const now = new Date();
-      const overdueMs = now.getTime() - transaction.dueDate.getTime();
+
+      const overdueMs =
+        now.getTime() - new Date(transaction.dueDate).getTime();
+
       const overdueDays = Math.max(
         0,
         Math.ceil(overdueMs / (1000 * 60 * 60 * 24))
@@ -138,6 +212,7 @@ router.post(
           book.totalCopies,
           book.availableCopies + 1
         );
+
         await book.save();
       }
 
@@ -148,8 +223,11 @@ router.post(
         fine: transaction.fine,
         transaction
       });
+
     } catch (error) {
-      res.status(500).json({ message: error.message });
+      res.status(500).json({
+        message: error.message
+      });
     }
   }
 );
