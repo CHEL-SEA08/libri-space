@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 
@@ -5,12 +6,17 @@ const API = "https://libri-space-backend.onrender.com/api";
 
 export default function AdminDashboard() {
   const { token } = useAuth();
+
   const [books, setBooks] = useState([]);
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
   const [category, setCategory] = useState("General");
   const [isbn, setIsbn] = useState("");
   const [copies, setCopies] = useState(1);
+
+  const [userId, setUserId] = useState("");
+  const [bookId, setBookId] = useState("");
+
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -18,7 +24,9 @@ export default function AdminDashboard() {
     const response = await fetch(`${API}/books`);
     const data = await response.json();
 
-    if (!response.ok) throw new Error(data.message || "Could not load books");
+    if (!response.ok) {
+      throw new Error(data.message || "Could not load books");
+    }
 
     setBooks(data);
   }
@@ -50,14 +58,17 @@ export default function AdminDashboard() {
 
       const data = await response.json();
 
-      if (!response.ok) throw new Error(data.message || "Could not add book");
+      if (!response.ok) {
+        throw new Error(data.message || "Could not add book");
+      }
 
-      setMessage("Book added successfully");
+      setMessage("Book added successfully!");
       setTitle("");
       setAuthor("");
       setCategory("General");
       setIsbn("");
       setCopies(1);
+
       await loadBooks();
     } catch (err) {
       setError(err.message);
@@ -65,7 +76,9 @@ export default function AdminDashboard() {
   }
 
   async function deleteBook(id) {
-    if (!window.confirm("Are you sure you want to delete this book?")) return;
+    if (!window.confirm("Are you sure you want to delete this book?")) {
+      return;
+    }
 
     setMessage("");
     setError("");
@@ -73,14 +86,52 @@ export default function AdminDashboard() {
     try {
       const response = await fetch(`${API}/books/${id}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
       });
 
       const data = await response.json();
 
-      if (!response.ok) throw new Error(data.message || "Could not delete book");
+      if (!response.ok) {
+        throw new Error(data.message || "Could not delete book");
+      }
 
       setMessage(data.message);
+      await loadBooks();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function issueBook(event) {
+    event.preventDefault();
+    setMessage("");
+    setError("");
+
+    try {
+      const response = await fetch(`${API}/transactions/issue`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          userId,
+          bookId
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Could not issue book");
+      }
+
+      setMessage("Book issued successfully!");
+      setUserId("");
+      setBookId("");
+
       await loadBooks();
     } catch (err) {
       setError(err.message);
@@ -90,7 +141,7 @@ export default function AdminDashboard() {
   return (
     <main className="page">
       <h1>Admin Dashboard</h1>
-      <p>Manage the library catalogue.</p>
+      <p>Manage books and borrowing records.</p>
 
       {message && <p className="success">{message}</p>}
       {error && <p className="error">{error}</p>}
@@ -99,16 +150,30 @@ export default function AdminDashboard() {
         <h2>Add a New Book</h2>
 
         <label>Book Title</label>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} required />
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          required
+        />
 
         <label>Author</label>
-        <input value={author} onChange={(e) => setAuthor(e.target.value)} required />
+        <input
+          value={author}
+          onChange={(e) => setAuthor(e.target.value)}
+          required
+        />
 
         <label>Category</label>
-        <input value={category} onChange={(e) => setCategory(e.target.value)} />
+        <input
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+        />
 
-        <label>ISBN (optional)</label>
-        <input value={isbn} onChange={(e) => setIsbn(e.target.value)} />
+        <label>ISBN</label>
+        <input
+          value={isbn}
+          onChange={(e) => setIsbn(e.target.value)}
+        />
 
         <label>Total Copies</label>
         <input
@@ -120,6 +185,41 @@ export default function AdminDashboard() {
         />
 
         <button type="submit">Add Book</button>
+      </form>
+
+      <h2>Issue a Book</h2>
+
+      <form className="form-card" onSubmit={issueBook}>
+        <label>Member MongoDB User ID</label>
+        <input
+          value={userId}
+          onChange={(e) => setUserId(e.target.value.trim())}
+          placeholder="Paste member User ID"
+          required
+        />
+
+        <label>Select Book</label>
+        <select
+          value={bookId}
+          onChange={(e) => setBookId(e.target.value)}
+          required
+        >
+          <option value="">Choose a book</option>
+
+          {books
+            .filter((book) => book.availableCopies > 0)
+            .map((book) => (
+              <option key={book._id} value={book._id}>
+                {book.title} ({book.availableCopies} available)
+              </option>
+            ))}
+        </select>
+
+        <button type="submit" disabled={!books.some(
+          (book) => book._id === bookId && book.availableCopies > 0
+        )}>
+          Issue Book
+        </button>
       </form>
 
       <h2>Library Catalogue ({books.length} books)</h2>
@@ -135,15 +235,22 @@ export default function AdminDashboard() {
               <th>Action</th>
             </tr>
           </thead>
+
           <tbody>
             {books.map((book) => (
               <tr key={book._id}>
                 <td>{book.title}</td>
                 <td>{book.author}</td>
                 <td>{book.category}</td>
-                <td>{book.availableCopies} / {book.totalCopies}</td>
                 <td>
-                  <button className="danger" onClick={() => deleteBook(book._id)}>
+                  {book.availableCopies} / {book.totalCopies}
+                </td>
+                <td>
+                  <button
+                    className="danger"
+                    type="button"
+                    onClick={() => deleteBook(book._id)}
+                  >
                     Delete
                   </button>
                 </td>
