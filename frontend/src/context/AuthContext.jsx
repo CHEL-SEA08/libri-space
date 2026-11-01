@@ -2,7 +2,7 @@
 import { createContext, useContext, useState } from "react";
 
 const AuthContext = createContext(null);
-const API = "http://localhost:5000/api";
+const API = "https://libri-space-backend.onrender.com/api";
 
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(
